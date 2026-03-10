@@ -1,15 +1,43 @@
+from pathlib import Path
 import pandas as pd
 import numpy as np
-import os
 
-RUTA_EXCEL = r"C:\Users\dario\Desktop\UNIVERSIDAD\Ingenieria de la salud- UBU\HUBU\Qº FEBRERO.xls"
+BASE_DIR = Path(__file__).resolve().parent.parent
+RUTA_EXCEL = BASE_DIR / "Data" / "Qº FEBRERO.xls"
+RUTA_SALIDA_CSV = BASE_DIR / "Data" / "quirofano_febrero_limpio.csv"
 
-def cargar_y_limpiar(ruta_excel: str) -> pd.DataFrame:
+
+def cargar_y_limpiar(ruta_excel: Path) -> pd.DataFrame:
+    """
+    Carga el Excel bruto del quirófano y devuelve un DataFrame limpio
+    con las columnas útiles para el proyecto de planificación.
+    """
     bruto = pd.read_excel(ruta_excel, header=None, engine="xlrd")
 
     columnas_utiles = [
-        0, 4, 5, 7, 12, 13, 16, 18, 21, 22, 26, 27, 28,
-        29, 30, 31, 32, 33, 34, 35, 36, 37, 38
+        0,   # paciente_id
+        4,   # servicio
+        5,   # quirofano
+        7,   # centro
+        12,  # fecha
+        13,  # hora_inicio
+        16,  # hora_fin
+        18,  # anestesia
+        21,  # ambulatorio
+        22,  # tipo_caso
+        26,  # turno
+        27,  # progr
+        28,  # impl
+        29,  # dx_codigo
+        30,  # diagnostico
+        31,  # proc_codigo
+        32,  # procedimiento
+        33,  # cirujano_principal
+        34,  # anestesista_principal
+        35,  # suspendida
+        36,  # motivo_suspension
+        37,  # provincia
+        38,  # sector
     ]
 
     df = bruto.iloc[11:, columnas_utiles].copy()
@@ -72,8 +100,17 @@ def cargar_y_limpiar(ruta_excel: str) -> pd.DataFrame:
     return df
 
 
-if __name__ == "__main__":
-    print("¿Existe el archivo?:", os.path.exists(RUTA_EXCEL))
+def main():
+    print("=== COMPROBACIÓN DE RUTAS ===")
+    print(f"Base del proyecto: {BASE_DIR}")
+    print(f"Excel encontrado: {RUTA_EXCEL.exists()}")
+    print(f"Ruta Excel: {RUTA_EXCEL}")
+
+    if not RUTA_EXCEL.exists():
+        raise FileNotFoundError(
+            f"No se encontró el archivo Excel en: {RUTA_EXCEL}\n"
+            "Mueve el archivo a la carpeta Data/ y vuelve a ejecutar."
+        )
 
     df = cargar_y_limpiar(RUTA_EXCEL)
 
@@ -86,5 +123,9 @@ if __name__ == "__main__":
     print("\n=== PRIMERAS FILAS ===")
     print(df.head(10).to_string(index=False))
 
-    df.to_csv("quirofano_febrero_limpio.csv", index=False)
-    print("\nArchivo generado: quirofano_febrero_limpio.csv")
+    df.to_csv(RUTA_SALIDA_CSV, index=False)
+    print(f"\nArchivo generado correctamente en:\n{RUTA_SALIDA_CSV}")
+
+
+if __name__ == "__main__":
+    main()
