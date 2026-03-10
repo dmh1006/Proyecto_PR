@@ -161,6 +161,81 @@ def main():
     ejemplo = estimar_nueva_cirugia(catalogo, "APENDICECTOMIA LAPAROSCOPICA")
     print(ejemplo)
 
+def agenda_dia(df_real: pd.DataFrame, fecha: str) -> pd.DataFrame:
+
+    fecha = pd.to_datetime(fecha)
+
+    agenda = (
+        df_real[df_real["fecha"] == fecha]
+        .sort_values(["quirofano", "inicio_dt"])
+        .copy()
+    )
+
+    return agenda
+
+
+def calcular_huecos_quirofano(agenda_qx: pd.DataFrame):
+
+    huecos = []
+
+    agenda_qx = agenda_qx.sort_values("inicio_dt")
+
+    for i in range(len(agenda_qx) - 1):
+
+        fin_actual = agenda_qx.iloc[i]["fin_dt"]
+        inicio_siguiente = agenda_qx.iloc[i + 1]["inicio_dt"]
+
+        gap = (inicio_siguiente - fin_actual).total_seconds() / 60
+
+        if gap > 0:
+
+            huecos.append({
+                "inicio_hueco": fin_actual,
+                "fin_hueco": inicio_siguiente,
+                "duracion_hueco_min": gap
+            })
+
+    return huecos
+
+
+def proponer_hueco(
+    df_real: pd.DataFrame,
+    catalogo: pd.DataFrame,
+    procedimiento: str,
+    fecha: str
+):
+
+    ficha = estimar_nueva_cirugia(catalogo, procedimiento)
+
+    duracion = ficha["duracion_planificable_min"]
+
+    agenda = agenda_dia(df_real, fecha)
+
+    candidatos = []
+
+    for qx in agenda["quirofano"].unique():
+
+        agenda_qx = agenda[agenda["quirofano"] == qx]
+
+        huecos = calcular_huecos_quirofano(agenda_qx)
+
+        for h in huecos:
+
+            if h["duracion_hueco_min"] >= duracion:
+
+                candidatos.append({
+                    "quirofano": qx,
+                    "inicio": h["inicio_hueco"],
+                    "fin_estimado": h["inicio_hueco"] + pd.Timedelta(minutes=duracion),
+                    "duracion_disponible": h["duracion_hueco_min"]
+                })
+
+    if len(candidatos) == 0:
+        return "No se encontró hueco disponible"
+
+    return candidatos[0]
+
+
 
 if __name__ == "__main__":
     main()
