@@ -1,5 +1,11 @@
+from io import BytesIO
+import calendar
+
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.patches import Rectangle
 
 try:
     from Proyecto.analisis_quirofano import (
@@ -8,7 +14,7 @@ try:
         construir_catalogo_quirurgico,
         estimar_nueva_cirugia,
         agenda_dia,
-        proponer_huecos,
+        calcular_huecos_quirofano,
     )
 except ImportError:
     from analisis_quirofano import (
@@ -17,7 +23,7 @@ except ImportError:
         construir_catalogo_quirurgico,
         estimar_nueva_cirugia,
         agenda_dia,
-        proponer_huecos,
+        calcular_huecos_quirofano,
     )
 
 
@@ -62,10 +68,6 @@ CSS = """
         font-size: 26px;
         font-weight: 800;
         line-height: 1.1;
-    }
-
-    .panel-card {
-        padding: 22px 28px 26px 28px;
     }
 
     .section-title {
@@ -237,6 +239,11 @@ CSS = """
         font-size: 14px;
     }
 
+    .export-card {
+        margin-top: 18px;
+        padding: 18px 22px;
+    }
+
     div[data-testid="stMetric"] {
         background: transparent;
         border: none;
@@ -332,6 +339,107 @@ def construir_label_candidato(row):
     holgura = int(round(float(row["holgura_min"])))
     habitual = "habitual" if bool(row["es_quirofano_habitual"]) else "no habitual"
     return f"{row['quirofano']} | {inicio}-{fin} | holgura {holgura} min | {habitual}"
+
+
+def obtener_agenda_base(df_real: pd.DataFrame, fecha) -> pd.DataFrame:
+    return agenda_dia(df_real, fecha).copy()
+
+
+def obtener_agenda_combinada(df_real: pd.DataFrame, fecha, cirugias_anadidas: pd.DataFrame) -> pd.DataFrame:
+    agenda_base = obtener_agenda_base(df_real, fecha)
+
+    if cirugias_anadidas is None or cirugias_anadidas.empty:
+        return agenda_base.sort_values(["quirofano", "inicio_dt"]).reset_index(drop=True)
+
+    fecha_ts = pd.to_datetime(fecha)
+    extras = cirugias_anadidas[cirugias_anadidas["fecha"] == fecha_ts].copy()
+
+    if extras.empty:
+        return agenda_base.sort_values(["quirofano", "inicio_dt"]).reset_index(drop=True)
+
+    agenda_total = pd.concat([agenda_base, extras], ignore_index=True)
+    return agenda_total.sort_values(["quirofano", "inicio_dt"]).reset_index(drop=True)
+
+
+def obtener_agenda_mensual(df_real: pd.DataFrame, fecha_ref, cirugias_anadidas: pd.DataFrame) -> pd.DataFrame:
+    fecha_ref = pd.to_datetime(fecha_ref)
+    inicio_mes = fecha_ref.replace(day=1)
+    fin_mes = inicio_mes + pd.offsets.MonthEnd(1)
+
+    fechas = pd.date_range(inicio_mes, fin_mes, freq="D")
+    agendas = []
+
+    for fecha in fechas:
+        agenda_fecha = obtener_agenda_combinada(df_real, fecha, cirugias_anadidas)
+        if not agenda_fecha.empty:
+            agendas.append(agenda_fecha)
+
+    if not agendas:
+        return pd.DataFrame()
+
+    agenda_mes = pd.concat(agendas, ignore_index=True)
+    return agenda_mes.sort_values(["fecha", "quirofano", "inicio_dt"]).reset_index(drop=True)
+
+
+def proponer_huecos_desde_agenda(
+    agenda_fecha: pd.DataFrame,
+    catalogo: pd.DataFrame,
+    procedimiento: str,
+    fecha,
+    hora_inicio_bloque="08:00",
+    hora_fin_bloque="20:00",
+    max_resultados=10,
+):
+    ficha = estimar_nueva_cirugia(catalogo, procedimiento)
+    duracion_necesaria = ficha["duracion_planificable_min"]
+
+    agenda = agenda_fecha.copy()
+    quirofanos_preferidos = [
+        q.strip() for q in str(ficha["quirofanos_habituales"]).split(",")
+        if q.strip()
+    ]
+
+    quirofanos_a_explorar = sorted(agenda["quirofano"].dropna().astype(str).unique().tolist()) if not agenda.empty else []
+    for q in quirofanos_preferidos:
+        if q not in quirofanos_a_explorar:
+            quirofanos_a_explorar.append(q)
+
+    candidatos = []
+
+    for qx in quirofanos_a_explorar:
+        agenda_qx = agenda[agenda["quirofano"] == qx].copy()
+
+        huecos = calcular_huecos_quirofano(
+            agenda_qx=agenda_qx,
+            fecha=fecha,
+            hora_inicio_bloque=hora_inicio_bloque,
+            hora_fin_bloque=hora_fin_bloque,
+        )
+
+        for h in huecos:
+            if h["duracion_hueco_min"] >= duracion_necesaria:
+                candidatos.append(
+                    {
+                        "procedimiento": ficha["procedimiento"],
+                        "quirofano": qx,
+                        "inicio": h["inicio_hueco"],
+                        "fin_estimado": h["inicio_hueco"] + pd.Timedelta(minutes=duracion_necesaria),
+                        "duracion_necesaria": duracion_necesaria,
+                        "duracion_disponible": h["duracion_hueco_min"],
+                        "holgura_min": h["duracion_hueco_min"] - duracion_necesaria,
+                        "es_quirofano_habitual": qx in quirofanos_preferidos,
+                    }
+                )
+
+    if not candidatos:
+        return pd.DataFrame()
+
+    candidatos_df = pd.DataFrame(candidatos)
+    candidatos_df = candidatos_df.sort_values(
+        by=["es_quirofano_habitual", "holgura_min", "inicio"],
+        ascending=[False, True, True],
+    )
+    return candidatos_df.head(max_resultados).reset_index(drop=True)
 
 
 def dibujar_calendario(agenda: pd.DataFrame, inicio_bloque: str, fin_bloque: str):
@@ -434,7 +542,7 @@ def preparar_tabla_candidatos(candidatos: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_tabla_candidatos(candidatos: pd.DataFrame):
-    st.markdown("<div class='card panel-card' style='min-height:auto; margin-top:18px;'>", unsafe_allow_html=True)
+    st.markdown("<div class='card' style='padding:18px 22px; margin-top:18px;'>", unsafe_allow_html=True)
     st.markdown("<div class='section-title' style='margin-bottom:16px;'>Mejores huecos candidatos</div>", unsafe_allow_html=True)
 
     if candidatos.empty:
@@ -469,6 +577,207 @@ def render_tabla_candidatos(candidatos: pd.DataFrame):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def preparar_agenda_exportacion(agenda: pd.DataFrame) -> pd.DataFrame:
+    if agenda.empty:
+        return pd.DataFrame(
+            columns=["Fecha", "Quirófano", "Inicio", "Fin", "Procedimiento", "Cirujano", "Paciente"]
+        )
+
+    df = agenda.copy()
+    df["Fecha"] = pd.to_datetime(df["fecha"]).dt.strftime("%Y-%m-%d")
+    df["Quirófano"] = df["quirofano"].astype(str)
+    df["Inicio"] = pd.to_datetime(df["inicio_dt"]).dt.strftime("%H:%M")
+    df["Fin"] = pd.to_datetime(df["fin_dt"]).dt.strftime("%H:%M")
+    df["Procedimiento"] = df["procedimiento_base"].fillna(df.get("procedimiento", ""))
+    df["Cirujano"] = df.get("cirujano_principal", "").fillna("")
+    df["Paciente"] = df.get("paciente_id", "").fillna("")
+
+    return df[["Fecha", "Quirófano", "Inicio", "Fin", "Procedimiento", "Cirujano", "Paciente"]]
+
+
+def agenda_a_csv_bytes(agenda: pd.DataFrame) -> bytes:
+    export_df = preparar_agenda_exportacion(agenda)
+    return export_df.to_csv(index=False).encode("utf-8-sig")
+
+
+def generar_pdf_diario(agenda: pd.DataFrame, fecha_ref, inicio_bloque="08:00", fin_bloque="20:00") -> bytes:
+    buffer = BytesIO()
+    fecha_ref = pd.to_datetime(fecha_ref)
+
+    try:
+        hora_ini = int(str(inicio_bloque).split(":")[0])
+        hora_fin = int(str(fin_bloque).split(":")[0])
+    except Exception:
+        hora_ini, hora_fin = 8, 20
+
+    if hora_fin <= hora_ini:
+        hora_ini, hora_fin = 8, 20
+
+    total_min = max(60, (hora_fin - hora_ini) * 60)
+
+    export_df = preparar_agenda_exportacion(agenda)
+
+    with PdfPages(buffer) as pdf:
+        fig = plt.figure(figsize=(14, 8))
+        ax = fig.add_subplot(111)
+        ax.axis("off")
+
+        ax.text(0.02, 0.95, "Planificación quirúrgica - vista diaria", fontsize=20, fontweight="bold")
+        ax.text(0.02, 0.90, f"Fecha: {fecha_ref.strftime('%Y-%m-%d')}", fontsize=12)
+        ax.text(0.02, 0.86, f"Cirugías del día: {len(export_df)}", fontsize=12)
+        ax.text(0.02, 0.82, f"Quirófanos activos: {agenda['quirofano'].nunique() if not agenda.empty else 0}", fontsize=12)
+
+        if not export_df.empty:
+            tabla = export_df.head(18)
+            table = ax.table(
+                cellText=tabla.values,
+                colLabels=tabla.columns,
+                loc="center",
+                cellLoc="center",
+                bbox=[0.02, 0.05, 0.96, 0.68],
+            )
+            table.auto_set_font_size(False)
+            table.set_fontsize(9)
+            table.scale(1, 1.4)
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        if not agenda.empty:
+            qx_orden = sorted(agenda["quirofano"].dropna().astype(str).unique().tolist())
+
+            fig, ax = plt.subplots(figsize=(16, max(5, len(qx_orden) * 1.2 + 2)))
+            ax.set_title(f"Calendario quirúrgico del día - {fecha_ref.strftime('%Y-%m-%d')}", fontsize=16, fontweight="bold", pad=18)
+
+            for idx, qx in enumerate(qx_orden):
+                ax.add_patch(Rectangle((hora_ini, idx - 0.35), hora_fin - hora_ini, 0.7, facecolor="#e9aeb8", edgecolor="none"))
+
+                agenda_qx = agenda[agenda["quirofano"].astype(str) == qx].copy()
+                for _, row in agenda_qx.iterrows():
+                    inicio = pd.to_datetime(row["inicio_dt"])
+                    fin = pd.to_datetime(row["fin_dt"])
+                    x0 = inicio.hour + inicio.minute / 60
+                    width = max(0.15, (fin - inicio).total_seconds() / 3600)
+                    etiqueta = truncar(row["procedimiento_base"] if "procedimiento_base" in row else row["procedimiento"], 22)
+
+                    ax.add_patch(
+                        Rectangle(
+                            (x0, idx - 0.27),
+                            width,
+                            0.54,
+                            facecolor="#f6b800",
+                            edgecolor="#b57d00",
+                            linewidth=1.0,
+                        )
+                    )
+                    ax.text(
+                        x0 + width / 2,
+                        idx,
+                        f"{etiqueta}\n{inicio.strftime('%H:%M')}-{fin.strftime('%H:%M')}",
+                        ha="center",
+                        va="center",
+                        fontsize=8,
+                        fontweight="bold",
+                    )
+
+            ax.set_xlim(hora_ini, hora_fin)
+            ax.set_ylim(-0.8, len(qx_orden) - 0.2)
+            ax.set_yticks(range(len(qx_orden)))
+            ax.set_yticklabels(qx_orden, fontsize=11, fontweight="bold")
+            ax.set_xticks(list(range(hora_ini, hora_fin)))
+            ax.set_xticklabels([f"{h}:00" for h in range(hora_ini, hora_fin)], fontsize=10)
+            ax.grid(axis="x", linestyle="--", alpha=0.3)
+            ax.invert_yaxis()
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["left"].set_visible(False)
+
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def generar_pdf_mensual(agenda_mes: pd.DataFrame, fecha_ref) -> bytes:
+    buffer = BytesIO()
+    fecha_ref = pd.to_datetime(fecha_ref)
+
+    anio = fecha_ref.year
+    mes = fecha_ref.month
+    nombre_mes = calendar.month_name[mes]
+
+    with PdfPages(buffer) as pdf:
+        fig = plt.figure(figsize=(14, 10))
+        ax = fig.add_subplot(111)
+        ax.axis("off")
+        ax.text(0.02, 0.95, f"Planificación quirúrgica mensual - {nombre_mes} {anio}", fontsize=20, fontweight="bold")
+        ax.text(0.02, 0.90, f"Total cirugías del mes: {len(agenda_mes)}", fontsize=12)
+        ax.text(0.02, 0.86, f"Quirófanos con actividad: {agenda_mes['quirofano'].nunique() if not agenda_mes.empty else 0}", fontsize=12)
+
+        counts = {}
+        if not agenda_mes.empty:
+            agenda_mes_aux = agenda_mes.copy()
+            agenda_mes_aux["dia"] = pd.to_datetime(agenda_mes_aux["fecha"]).dt.day
+            counts = agenda_mes_aux.groupby("dia").size().to_dict()
+
+        cal = calendar.monthcalendar(anio, mes)
+        encabezados = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+        celdas = []
+
+        for semana in cal:
+            fila = []
+            for dia in semana:
+                if dia == 0:
+                    fila.append("")
+                else:
+                    n = counts.get(dia, 0)
+                    texto = f"{dia}"
+                    if n > 0:
+                        texto += f"\n{n} cir."
+                    fila.append(texto)
+            celdas.append(fila)
+
+        table = ax.table(
+            cellText=celdas,
+            colLabels=encabezados,
+            cellLoc="center",
+            loc="center",
+            bbox=[0.05, 0.25, 0.90, 0.50],
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(12)
+        table.scale(1, 2.2)
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        fig = plt.figure(figsize=(14, 8))
+        ax = fig.add_subplot(111)
+        ax.axis("off")
+        ax.text(0.02, 0.95, "Detalle mensual", fontsize=18, fontweight="bold")
+
+        export_df = preparar_agenda_exportacion(agenda_mes)
+        if not export_df.empty:
+            tabla = export_df.head(28)
+            table = ax.table(
+                cellText=tabla.values,
+                colLabels=tabla.columns,
+                loc="center",
+                cellLoc="center",
+                bbox=[0.02, 0.04, 0.96, 0.82],
+            )
+            table.auto_set_font_size(False)
+            table.set_fontsize(8.5)
+            table.scale(1, 1.35)
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 # ----------------------
 # CARGA DE DATOS
 # ----------------------
@@ -494,8 +803,26 @@ if "form_data" not in st.session_state:
 if "candidatos" not in st.session_state:
     st.session_state.candidatos = pd.DataFrame()
 
+if "cirugias_anadidas" not in st.session_state:
+    st.session_state.cirugias_anadidas = pd.DataFrame(
+        columns=[
+            "quirofano",
+            "fecha",
+            "inicio_dt",
+            "fin_dt",
+            "procedimiento",
+            "procedimiento_base",
+            "cirujano_principal",
+            "paciente_id",
+        ]
+    )
+
 if "agenda_actual" not in st.session_state:
-    st.session_state.agenda_actual = agenda_dia(df_real, st.session_state.form_data["fecha"])
+    st.session_state.agenda_actual = obtener_agenda_combinada(
+        df_real,
+        st.session_state.form_data["fecha"],
+        st.session_state.cirugias_anadidas,
+    )
 
 if "seleccion_candidato" not in st.session_state:
     st.session_state.seleccion_candidato = 0
@@ -507,10 +834,7 @@ form_data = st.session_state.form_data
 # ----------------------
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-# KPIs arriba
 c1, c2, c3, c4 = st.columns(4)
-
-# paneles principales
 panel_izq, panel_der = st.columns([1.25, 1.0])
 
 with panel_izq:
@@ -592,12 +916,22 @@ ficha_preview = estimar_nueva_cirugia(catalogo, procedimiento) if procedimiento 
     "quirofanos_habituales": "",
     "n_casos_historicos": 0,
 }
-agenda_preview = agenda_dia(df_real, fecha_sel)
+
+agenda_preview = obtener_agenda_combinada(
+    df_real,
+    fecha_sel,
+    st.session_state.cirugias_anadidas,
+)
+
+agenda_mes_preview = obtener_agenda_mensual(
+    df_real,
+    fecha_sel,
+    st.session_state.cirugias_anadidas,
+)
 
 with panel_der:
     dibujar_ficha(ficha_preview)
 
-# KPIs debajo de valores reactivos calculados
 with c1:
     dibujar_kpi("Cirugías del día", str(len(agenda_preview)))
 with c2:
@@ -606,6 +940,7 @@ with c3:
     dibujar_kpi("Casos históricos", str(ficha_preview["n_casos_historicos"]))
 with c4:
     dibujar_kpi("Quirófanos activos", str(agenda_preview["quirofano"].nunique()))
+
 # ----------------------
 # GENERAR PROPUESTA
 # ----------------------
@@ -620,8 +955,14 @@ if generar:
         "fin_bloque": fin_bloque,
     }
 
-    candidatos = proponer_huecos(
-        df_real=df_real,
+    agenda_planificacion = obtener_agenda_combinada(
+        df_real,
+        fecha_sel,
+        st.session_state.cirugias_anadidas,
+    )
+
+    candidatos = proponer_huecos_desde_agenda(
+        agenda_fecha=agenda_planificacion,
         catalogo=catalogo,
         procedimiento=procedimiento,
         fecha=fecha_sel,
@@ -630,12 +971,12 @@ if generar:
         max_resultados=10,
     )
 
-    st.session_state.agenda_actual = agenda_preview
+    st.session_state.agenda_actual = agenda_planificacion
     st.session_state.candidatos = candidatos
     st.session_state.seleccion_candidato = 0
     st.rerun()
 
-# selector de hueco elegible por el usuario
+# selector de hueco elegible
 if not st.session_state.candidatos.empty:
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
     etiquetas_candidatos = [construir_label_candidato(row) for _, row in st.session_state.candidatos.iterrows()]
@@ -669,10 +1010,16 @@ if anadir:
             "paciente_id": st.session_state.form_data["paciente"],
         }
 
-        st.session_state.agenda_actual = (
-            pd.concat([st.session_state.agenda_actual, pd.DataFrame([nueva])], ignore_index=True)
-            .sort_values(["quirofano", "inicio_dt"])
+        st.session_state.cirugias_anadidas = (
+            pd.concat([st.session_state.cirugias_anadidas, pd.DataFrame([nueva])], ignore_index=True)
+            .sort_values(["fecha", "quirofano", "inicio_dt"])
             .reset_index(drop=True)
+        )
+
+        st.session_state.agenda_actual = obtener_agenda_combinada(
+            df_real,
+            st.session_state.form_data["fecha"],
+            st.session_state.cirugias_anadidas,
         )
 
         st.success(
@@ -680,6 +1027,73 @@ if anadir:
             f"{pd.to_datetime(elegido['inicio']).strftime('%H:%M')} a "
             f"{pd.to_datetime(elegido['fin_estimado']).strftime('%H:%M')}."
         )
+
+# ----------------------
+# EXPORTACIÓN
+# ----------------------
+st.markdown("<div class='card export-card'>", unsafe_allow_html=True)
+st.markdown("<div class='section-title' style='font-size:22px; margin-bottom:10px;'>Exportar planificación</div>", unsafe_allow_html=True)
+
+exp1, exp2, exp3 = st.columns([1.2, 1, 1])
+
+with exp1:
+    vista_exportacion = st.selectbox(
+        "Vista a exportar",
+        options=["Día actual", "Mes actual"],
+        key="vista_exportacion",
+    )
+
+if vista_exportacion == "Día actual":
+    agenda_export = obtener_agenda_combinada(
+        df_real,
+        fecha_sel,
+        st.session_state.cirugias_anadidas,
+    )
+    nombre_base = f"planificacion_diaria_{pd.to_datetime(fecha_sel).strftime('%Y_%m_%d')}"
+else:
+    agenda_export = obtener_agenda_mensual(
+        df_real,
+        fecha_sel,
+        st.session_state.cirugias_anadidas,
+    )
+    nombre_base = f"planificacion_mensual_{pd.to_datetime(fecha_sel).strftime('%Y_%m')}"
+
+csv_bytes = agenda_a_csv_bytes(agenda_export)
+
+if vista_exportacion == "Día actual":
+    pdf_bytes = generar_pdf_diario(
+        agenda_export,
+        fecha_sel,
+        inicio_bloque=inicio_bloque,
+        fin_bloque=fin_bloque,
+    )
+else:
+    pdf_bytes = generar_pdf_mensual(
+        agenda_export,
+        fecha_sel,
+    )
+
+with exp2:
+    st.download_button(
+        "Descargar CSV",
+        data=csv_bytes,
+        file_name=f"{nombre_base}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="download_csv",
+    )
+
+with exp3:
+    st.download_button(
+        "Descargar PDF",
+        data=pdf_bytes,
+        file_name=f"{nombre_base}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        key="download_pdf",
+    )
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 # ----------------------
 # RENDER FINAL
