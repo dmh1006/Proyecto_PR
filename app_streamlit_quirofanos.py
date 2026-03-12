@@ -1031,8 +1031,7 @@ if anadir:
 # ----------------------
 # EXPORTACIÓN
 # ----------------------
-st.markdown("<div class='card export-card'>", unsafe_allow_html=True)
-st.markdown("<div class='section-title' style='font-size:22px; margin-bottom:10px;'>Exportar planificación</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title' style='font-size:22px; margin:18px 0 10px 0;'>Exportar planificación</div>", unsafe_allow_html=True)
 
 exp1, exp2, exp3 = st.columns([1.2, 1, 1])
 
@@ -1092,8 +1091,6 @@ with exp3:
         use_container_width=True,
         key="download_pdf",
     )
-
-st.markdown("</div>", unsafe_allow_html=True)
 
 # ----------------------
 # RENDER FINAL
