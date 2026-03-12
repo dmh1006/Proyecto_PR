@@ -300,7 +300,5 @@ def proponer_huecos(
 
     return candidatos_df.head(max_resultados).reset_index(drop=True)
 
-
-
 if __name__ == "__main__":
     main()
