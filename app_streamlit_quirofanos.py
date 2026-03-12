@@ -4,7 +4,7 @@ from datetime import datetime, date, time
 import pandas as pd
 import streamlit as st
 
-from analisis_quirofano import (
+from Proyecto.analisis_quirofano import (
     cargar_datos,
     preparar_dataset_funcional,
     construir_catalogo_quirurgico,
