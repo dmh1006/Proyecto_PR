@@ -1,10 +1,7 @@
-from pathlib import Path
-from datetime import datetime, date, time
-
 import pandas as pd
 import streamlit as st
 
-from Proyecto.analisis_quirofano import (
+from analisis_quirofano import (
     cargar_datos,
     preparar_dataset_funcional,
     construir_catalogo_quirurgico,
@@ -31,13 +28,11 @@ CSS = """
         padding-bottom: 2rem;
         max-width: 1500px;
     }
-    .kpi-card, .panel-card, .calendar-card {
+    .kpi-card {
         background: white;
         border: 1px solid #d7dee7;
         border-radius: 22px;
         box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
-    }
-    .kpi-card {
         padding: 20px 24px;
         min-height: 110px;
     }
@@ -52,21 +47,18 @@ CSS = """
         font-weight: 800;
         line-height: 1.1;
     }
-    .panel-card {
-        padding: 22px 28px 26px 28px;
-        min-height: 520px;
-    }
     .section-title {
         color: #081a44;
         font-size: 28px;
         font-weight: 800;
-        margin-bottom: 22px;
+        margin-bottom: 14px;
     }
     .mini-card {
         background: #eef2f6;
         border-radius: 16px;
         padding: 16px 16px 14px 16px;
         min-height: 96px;
+        margin-bottom: 12px;
     }
     .mini-label {
         color: #607694;
@@ -99,6 +91,10 @@ CSS = """
         margin-top: 8px;
     }
     .calendar-card {
+        background: white;
+        border: 1px solid #d7dee7;
+        border-radius: 22px;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
         padding: 18px 14px 20px 14px;
         margin-top: 18px;
     }
@@ -294,6 +290,14 @@ def dibujar_ficha(ficha):
     )
 
 
+def construir_label_candidato(row):
+    inicio = pd.to_datetime(row["inicio"]).strftime("%H:%M")
+    fin = pd.to_datetime(row["fin_estimado"]).strftime("%H:%M")
+    holgura = int(round(float(row["holgura_min"])))
+    habitual = "habitual" if bool(row["es_quirofano_habitual"]) else "no habitual"
+    return f"{row['quirofano']} | {inicio}-{fin} | holgura {holgura} min | {habitual}"
+
+
 def dibujar_calendario(agenda: pd.DataFrame, inicio_bloque: str, fin_bloque: str):
     st.markdown("<div class='calendar-title'>Calendario visual del día</div>", unsafe_allow_html=True)
 
@@ -408,103 +412,218 @@ def render_tabla_candidatos(candidatos: pd.DataFrame):
 # Carga de datos
 _, df_real, catalogo = cargar_base()
 
-# Estado
-if "candidatos" not in st.session_state:
-    st.session_state.candidatos = pd.DataFrame()
-if "ficha" not in st.session_state:
-    st.session_state.ficha = None
-if "agenda_actual" not in st.session_state:
-    st.session_state.agenda_actual = pd.DataFrame()
+# ----------------------
+# ESTADO DE LA APLICACIÓN
+# ----------------------
+
+# valores iniciales del formulario
 if "form_data" not in st.session_state:
-    fecha_default = pd.to_datetime(df_real["fecha"].min()).date()
-    proc_default = str(catalogo.iloc[0]["procedimiento_base"])
     st.session_state.form_data = {
         "paciente": "Paciente demo",
         "cirujano": "Dr. Demo",
-        "procedimiento": proc_default,
+        "procedimiento": None,
         "prioridad": "Programada",
-        "fecha": fecha_default,
+        "fecha": pd.to_datetime(df_real["fecha"].min()).date(),
         "inicio_bloque": "08:00",
         "fin_bloque": "20:00",
     }
 
 form_data = st.session_state.form_data
 
+if "candidatos" not in st.session_state:
+    st.session_state.candidatos = pd.DataFrame()
+
+if "agenda_actual" not in st.session_state:
+    st.session_state.agenda_actual = agenda_dia(df_real, form_data["fecha"])
+
+if "seleccion_candidato" not in st.session_state:
+    st.session_state.seleccion_candidato = 0
+
+agenda_actual = st.session_state.agenda_actual
+candidatos = st.session_state.candidatos
+if "candidatos" not in st.session_state:
+    st.session_state.candidatos = pd.DataFrame()
+if "agenda_actual" not in st.session_state:
+    st.session_state.agenda_actual = pd.DataFrame()
+if "seleccion_candidato" not in st.session_state:
+    st.session_state.seleccion_candidato = 0
+
 # Header principal
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-# Si no hay ficha todavía, usar la del procedimiento actual
-if st.session_state.ficha is None:
-    st.session_state.ficha = estimar_nueva_cirugia(catalogo, form_data["procedimiento"])
 
 if st.session_state.agenda_actual.empty:
     st.session_state.agenda_actual = agenda_dia(df_real, form_data["fecha"])
 
-ficha = st.session_state.ficha
 agenda_actual = st.session_state.agenda_actual
 candidatos = st.session_state.candidatos
 
-# KPIs
-k1, k2, k3, k4 = st.columns(4)
-with k1:
-    dibujar_kpi("Cirugías del día", str(len(agenda_actual)))
-with k2:
-    dibujar_kpi("Duración planificable", formatear_min(ficha["duracion_planificable_min"]))
-with k3:
-    dibujar_kpi("Casos históricos", str(ficha["n_casos_historicos"]))
-with k4:
-    dibujar_kpi("Quirófanos activos", str(agenda_actual["quirofano"].nunique()))
+# lista real de procedimientos disponibles
+opciones_procedimiento = sorted(
+    catalogo["procedimiento_base"].dropna().astype(str).unique().tolist()
+)
 
-st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+# si no hay procedimiento seleccionado aún, coger el primero
+if form_data["procedimiento"] is None:
+    form_data["procedimiento"] = opciones_procedimiento[0](catalogo["procedimiento_base"].dropna().astype(str).unique().tolist())
+prioridades = ["Programada", "Preferente", "Urgente"]
 
-# Paneles superiores
 izq, der = st.columns([1.25, 1.0])
 
 with izq:
-    st.markdown("<div class='panel-card'>", unsafe_allow_html=True)
+
     st.markdown("<div class='section-title'>Nueva planificación</div>", unsafe_allow_html=True)
 
     c1, c2 = st.columns(2)
+
     with c1:
-        paciente = st.text_input("Paciente", value=form_data["paciente"])
+        paciente = st.text_input(
+            "Paciente",
+            value=form_data["paciente"],
+        )
+
     with c2:
-        cirujano = st.text_input("Cirujano", value=form_data["cirujano"])
+        cirujano = st.text_input(
+            "Cirujano",
+            value=form_data["cirujano"],
+        )
+
+    c3, c4 = st.columns(2)
+
+    with c3:
+        procedimiento = st.selectbox(
+            "Procedimiento",
+            opciones_procedimiento,
+            index=opciones_procedimiento.index(form_data["procedimiento"]),
+        )
+
+    with c4:
+        prioridad = st.selectbox(
+            "Prioridad",
+            prioridades,
+            index=prioridades.index(form_data["prioridad"]),
+        )
+
+    c5, c6 = st.columns(2)
+
+    with c5:
+        fecha_sel = st.date_input(
+            "Fecha",
+            value=form_data["fecha"],
+        )
+
+    with c6:
+        inicio_bloque = st.text_input(
+            "Inicio bloque",
+            value=form_data["inicio_bloque"],
+        )
+
+    c7, _ = st.columns(2)
+
+    with c7:
+        fin_bloque = st.text_input(
+            "Fin bloque",
+            value=form_data["fin_bloque"],
+        )
+
+    # ficha reactiva (se actualiza al cambiar cirugía)
+    ficha_preview = estimar_nueva_cirugia(catalogo, procedimiento)
+    agenda_preview = agenda_dia(df_real, fecha_sel)
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    b1, b2 = st.columns(2)
+
+    with b1:
+        generar = st.button(
+            "Generar propuesta",
+            use_container_width=True,
+            type="primary",
+        )
+
+    with b2:
+        anadir = st.button(
+            "Añadir cirugía seleccionada",
+            use_container_width=True,
+        )
+    st.markdown("<div class='section-title'>Nueva planificación</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        paciente = st.text_input("Paciente", value=form_data["paciente"], key="paciente_input")
+    with c2:
+        cirujano = st.text_input("Cirujano", value=form_data["cirujano"], key="cirujano_input")
 
     c3, c4 = st.columns(2)
     with c3:
         procedimiento = st.selectbox(
             "Procedimiento",
-            options=sorted(catalogo["procedimiento_base"].dropna().astype(str).unique().tolist()),
-            index=sorted(catalogo["procedimiento_base"].dropna().astype(str).unique().tolist()).index(form_data["procedimiento"]),
+            options=opciones_procedimiento,
+            index=opciones_procedimiento.index(form_data["procedimiento"]),
+            key="procedimiento_input",
         )
     with c4:
-        prioridad = st.selectbox("Prioridad", ["Programada", "Preferente", "Urgente"], index=["Programada", "Preferente", "Urgente"].index(form_data["prioridad"]))
+        prioridad = st.selectbox(
+            "Prioridad",
+            prioridades,
+            index=prioridades.index(form_data["prioridad"]),
+            key="prioridad_input",
+        )
 
     c5, c6 = st.columns(2)
     with c5:
-        fecha_sel = st.date_input("Fecha", value=form_data["fecha"])
+        fecha_sel = st.date_input("Fecha", value=form_data["fecha"], key="fecha_input")
     with c6:
-        inicio_bloque = st.text_input("Inicio bloque", value=form_data["inicio_bloque"])
+        inicio_bloque = st.text_input("Inicio bloque", value=form_data["inicio_bloque"], key="inicio_input")
 
-    c7, _ = st.columns(2)
+    c7, c8 = st.columns(2)
     with c7:
-        fin_bloque = st.text_input("Fin bloque", value=form_data["fin_bloque"])
+        fin_bloque = st.text_input("Fin bloque", value=form_data["fin_bloque"], key="fin_input")
 
+    ficha_preview = estimar_nueva_cirugia(catalogo, procedimiento)
+    agenda_preview = agenda_dia(df_real, fecha_sel)
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     b1, b2 = st.columns(2)
     with b1:
         generar = st.button("Generar propuesta", use_container_width=True, type="primary")
     with b2:
-        anadir = st.button("Añadir cirugía", use_container_width=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
+        anadir = st.button("Añadir cirugía seleccionada", use_container_width=True)
 
 with der:
-    st.markdown("<div class='panel-card'>", unsafe_allow_html=True)
-    dibujar_ficha(ficha)
-    st.markdown("</div>", unsafe_allow_html=True)
+    dibujar_ficha(ficha_preview)
+
+# KPIs
+k1, k2, k3, k4 = st.columns(4)
+with k1:
+    dibujar_kpi("Cirugías del día", str(len(agenda_preview)))
+with k2:
+    dibujar_kpi("Duración planificable", formatear_min(ficha_preview["duracion_planificable_min"]))
+with k3:
+    dibujar_kpi("Casos históricos", str(ficha_preview["n_casos_historicos"]))
+with k4:
+    dibujar_kpi("Quirófanos activos", str(agenda_preview["quirofano"].nunique()))
+
+st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+# Selector de hueco candidato
+if not candidatos.empty:
+    etiquetas_candidatos = [construir_label_candidato(row) for _, row in candidatos.iterrows()]
+    indice_previo = min(st.session_state.seleccion_candidato, len(etiquetas_candidatos) - 1)
+    seleccion_label = st.selectbox(
+        "Hueco a añadir",
+        options=etiquetas_candidatos,
+        index=indice_previo,
+        key="selector_candidato",
+    )
+    st.session_state.seleccion_candidato = etiquetas_candidatos.index(seleccion_label)
 
 # Acciones
+# ----------------------
+# GENERAR PROPUESTA
+# ----------------------
+
 if generar:
+
+    # guardar estado del formulario
     st.session_state.form_data = {
         "paciente": paciente,
         "cirujano": cirujano,
@@ -515,8 +634,6 @@ if generar:
         "fin_bloque": fin_bloque,
     }
 
-    ficha = estimar_nueva_cirugia(catalogo, procedimiento)
-    agenda_actual = agenda_dia(df_real, fecha_sel)
     candidatos = proponer_huecos(
         df_real=df_real,
         catalogo=catalogo,
@@ -524,24 +641,50 @@ if generar:
         fecha=fecha_sel,
         hora_inicio_bloque=inicio_bloque,
         hora_fin_bloque=fin_bloque,
-        max_resultados=5,
+        max_resultados=10,
     )
 
-    st.session_state.ficha = ficha
-    st.session_state.agenda_actual = agenda_actual
+    st.session_state.agenda_actual = agenda_preview
     st.session_state.candidatos = candidatos
+    st.session_state.seleccion_candidato = 0
+
+    st.rerun()
+    st.session_state.form_data = {
+        "paciente": paciente,
+        "cirujano": cirujano,
+        "procedimiento": procedimiento,
+        "prioridad": prioridad,
+        "fecha": fecha_sel,
+        "inicio_bloque": inicio_bloque,
+        "fin_bloque": fin_bloque,
+    }
+
+    candidatos = proponer_huecos(
+        df_real=df_real,
+        catalogo=catalogo,
+        procedimiento=procedimiento,
+        fecha=fecha_sel,
+        hora_inicio_bloque=inicio_bloque,
+        hora_fin_bloque=fin_bloque,
+        max_resultados=10,
+    )
+
+    st.session_state.agenda_actual = agenda_preview
+    st.session_state.candidatos = candidatos
+    st.session_state.seleccion_candidato = 0
     st.rerun()
 
 if anadir:
     if st.session_state.candidatos.empty:
         st.warning("Primero genera una propuesta.")
     else:
-        mejor = st.session_state.candidatos.iloc[0].copy()
+        idx = min(st.session_state.seleccion_candidato, len(st.session_state.candidatos) - 1)
+        elegido = st.session_state.candidatos.iloc[idx].copy()
         nueva = {
-            "quirofano": mejor["quirofano"],
+            "quirofano": elegido["quirofano"],
             "fecha": pd.to_datetime(st.session_state.form_data["fecha"]),
-            "inicio_dt": pd.to_datetime(mejor["inicio"]),
-            "fin_dt": pd.to_datetime(mejor["fin_estimado"]),
+            "inicio_dt": pd.to_datetime(elegido["inicio"]),
+            "fin_dt": pd.to_datetime(elegido["fin_estimado"]),
             "procedimiento": st.session_state.form_data["procedimiento"],
             "procedimiento_base": st.session_state.form_data["procedimiento"],
             "cirujano_principal": st.session_state.form_data["cirujano"],
@@ -552,15 +695,15 @@ if anadir:
             ignore_index=True,
         ).sort_values(["quirofano", "inicio_dt"])
         st.success(
-            f"Cirugía añadida en {mejor['quirofano']} de {pd.to_datetime(mejor['inicio']).strftime('%H:%M')} a {pd.to_datetime(mejor['fin_estimado']).strftime('%H:%M')}."
+            f"Cirugía añadida en {elegido['quirofano']} de {pd.to_datetime(elegido['inicio']).strftime('%H:%M')} a {pd.to_datetime(elegido['fin_estimado']).strftime('%H:%M')}."
         )
 
 # Render dinámico
 st.markdown("<div class='calendar-card'>", unsafe_allow_html=True)
 dibujar_calendario(
-    st.session_state.agenda_actual,
-    st.session_state.form_data["inicio_bloque"],
-    st.session_state.form_data["fin_bloque"],
+    st.session_state.agenda_actual if not st.session_state.agenda_actual.empty else agenda_preview,
+    inicio_bloque,
+    fin_bloque,
 )
 st.markdown("</div>", unsafe_allow_html=True)
 
