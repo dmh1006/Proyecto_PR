@@ -357,35 +357,115 @@ def proponer_huecos(
     return candidatos_df.head(max_resultados).reset_index(drop=True)
 
 
-def obtener_agenda_combinada(
-    df_real: pd.DataFrame,
-    fecha: str | pd.Timestamp,
-    cirugias_anadidas: list[dict] | None = None,
-) -> pd.DataFrame:
-    """Combina la agenda histórica con las cirugías añadidas manualmente."""
-    agenda = agenda_dia(df_real, fecha).copy()
-    agenda["fuente"] = "Histórico"
+def obtener_agenda_combinada(df_real, fecha_sel, cirugias_anadidas):
+    """
+    Combina la agenda histórica del día con las cirugías simuladas añadidas
+    por el usuario, dejando una estructura homogénea para representar y analizar.
 
+    Parámetros
+    ----------
+    df_real : pd.DataFrame
+        Dataset histórico de cirugías.
+    fecha_sel : str o pd.Timestamp
+        Fecha seleccionada.
+    cirugias_anadidas : list[dict]
+        Lista de cirugías simuladas añadidas en la sesión.
+
+    Retornos
+    --------
+    pd.DataFrame
+        Agenda combinada del día con columnas homogéneas.
+    """
+    fecha_ts = pd.to_datetime(fecha_sel).normalize()
+
+    # -----------------------------
+    # AGENDA HISTÓRICA
+    # -----------------------------
+    agenda_real = df_real.copy()
+
+    agenda_real["fecha"] = pd.to_datetime(agenda_real["fecha"]).dt.normalize()
+    agenda_real = agenda_real[agenda_real["fecha"] == fecha_ts].copy()
+
+    if "inicio_dt" in agenda_real.columns:
+        agenda_real["inicio_dt"] = pd.to_datetime(agenda_real["inicio_dt"])
+    elif "inicio" in agenda_real.columns:
+        agenda_real["inicio_dt"] = pd.to_datetime(agenda_real["inicio"])
+    else:
+        agenda_real["inicio_dt"] = pd.NaT
+
+    if "fin_dt" in agenda_real.columns:
+        agenda_real["fin_dt"] = pd.to_datetime(agenda_real["fin_dt"])
+    elif "fin_estimado" in agenda_real.columns:
+        agenda_real["fin_dt"] = pd.to_datetime(agenda_real["fin_estimado"])
+    elif "fin" in agenda_real.columns:
+        agenda_real["fin_dt"] = pd.to_datetime(agenda_real["fin"])
+    else:
+        agenda_real["fin_dt"] = pd.NaT
+
+    if "procedimiento_base" not in agenda_real.columns:
+        if "procedimiento" in agenda_real.columns:
+            agenda_real["procedimiento_base"] = agenda_real["procedimiento"]
+        else:
+            agenda_real["procedimiento_base"] = "Sin nombre"
+
+    if "duracion_min" not in agenda_real.columns:
+        agenda_real["duracion_min"] = (
+            (agenda_real["fin_dt"] - agenda_real["inicio_dt"]).dt.total_seconds() / 60
+        )
+
+    agenda_real["fuente"] = "Histórico"
+
+    columnas_base = [
+        "fecha",
+        "quirofano",
+        "inicio_dt",
+        "fin_dt",
+        "procedimiento_base",
+        "duracion_min",
+        "fuente",
+        "holgura_min",
+        "es_quirofano_habitual",
+    ]
+
+    for col in columnas_base:
+        if col not in agenda_real.columns:
+            agenda_real[col] = None
+
+    agenda_real = agenda_real[columnas_base].copy()
+
+    # -----------------------------
+    # AGENDA SIMULADA
+    # -----------------------------
     if cirugias_anadidas:
-        extra = pd.DataFrame(cirugias_anadidas).copy()
-        if not extra.empty:
-            extra["fecha"] = pd.to_datetime(extra["fecha"])
-            extra = extra[extra["fecha"].dt.normalize() == pd.to_datetime(fecha).normalize()].copy()
-            if not extra.empty:
-                extra["inicio_dt"] = pd.to_datetime(extra["inicio"])
-                extra["fin_dt"] = pd.to_datetime(extra["fin_estimado"])
-                extra["duracion_min"] = (extra["fin_dt"] - extra["inicio_dt"]).dt.total_seconds() / 60
-                extra["procedimiento"] = extra["procedimiento"].astype(str)
-                extra["procedimiento_base"] = extra["procedimiento"].astype(str)
-                extra["fuente"] = "Propuesta añadida"
-                cols_base = list(agenda.columns)
-                for col in cols_base:
-                    if col not in extra.columns:
-                        extra[col] = pd.NA
-                extra = extra[cols_base]
-                agenda = pd.concat([agenda, extra], ignore_index=True, sort=False)
+        agenda_sim = pd.DataFrame(cirugias_anadidas).copy()
+    else:
+        agenda_sim = pd.DataFrame(columns=columnas_base)
 
-    return agenda.sort_values(["quirofano", "inicio_dt"]).reset_index(drop=True)
+    for col in columnas_base:
+        if col not in agenda_sim.columns:
+            agenda_sim[col] = None
+
+    if not agenda_sim.empty:
+        agenda_sim["fecha"] = pd.to_datetime(agenda_sim["fecha"]).dt.normalize()
+        agenda_sim["inicio_dt"] = pd.to_datetime(agenda_sim["inicio_dt"])
+        agenda_sim["fin_dt"] = pd.to_datetime(agenda_sim["fin_dt"])
+
+        agenda_sim = agenda_sim[agenda_sim["fecha"] == fecha_ts].copy()
+
+    agenda_sim = agenda_sim[columnas_base].copy()
+
+    # -----------------------------
+    # UNIÓN FINAL
+    # -----------------------------
+    agenda = pd.concat([agenda_real, agenda_sim], ignore_index=True)
+
+    agenda["inicio_dt"] = pd.to_datetime(agenda["inicio_dt"], errors="coerce")
+    agenda["fin_dt"] = pd.to_datetime(agenda["fin_dt"], errors="coerce")
+
+    agenda = agenda.dropna(subset=["quirofano", "inicio_dt", "fin_dt"])
+    agenda = agenda.sort_values(["quirofano", "inicio_dt"]).reset_index(drop=True)
+
+    return agenda
 
 def hay_solape_en_quirofano(
     agenda: pd.DataFrame,
