@@ -52,53 +52,151 @@ def minutos_desde_referencia(ts: pd.Timestamp, referencia: pd.Timestamp) -> floa
 
 
 def figura_timeline_agenda(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: str) -> go.Figure:
-    inicio_bloque = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 08:00")
-    fin_bloque = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 20:00")
+    """
+    Genera una agenda diaria horizontal por quirófanos.
+    Cada fila corresponde a un quirófano y cada cirugía se dibuja como un bloque horizontal.
+    """
+    inicio_bloque = pd.Timestamp(f"{pd.to_datetime(fecha).strftime('%Y-%m-%d')} 08:00")
+    fin_bloque = pd.Timestamp(f"{pd.to_datetime(fecha).strftime('%Y-%m-%d')} 20:00")
+
+    fig = go.Figure()
 
     if agenda.empty:
-        fig = go.Figure()
         fig.update_layout(
             title=titulo,
-            xaxis_title="Hora",
+            xaxis_title="Hora del día",
             yaxis_title="Quirófano",
             template="plotly_white",
             height=500,
         )
+        fig.add_annotation(
+            text="No hay cirugías registradas para este día.",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(size=16),
+        )
         return fig
 
     data = agenda.copy()
-    data["inicio_min"] = data["inicio_dt"].apply(lambda x: minutos_desde_referencia(x, inicio_bloque))
-    data["fin_min"] = data["fin_dt"].apply(lambda x: minutos_desde_referencia(x, inicio_bloque))
-    data["duracion_plot"] = data["fin_min"] - data["inicio_min"]
-    data["etiqueta"] = data["procedimiento_base"].fillna(data["procedimiento"]).fillna("Sin nombre")
-    data["fuente_plot"] = data.get("fuente", "Histórico")
+    data["inicio_dt"] = pd.to_datetime(data["inicio_dt"])
+    data["fin_dt"] = pd.to_datetime(data["fin_dt"])
 
-    fig = px.timeline(
-        data,
-        x_start="inicio_dt",
-        x_end="fin_dt",
-        y="quirofano",
-        color="fuente_plot",
-        hover_data={
-            "etiqueta": True,
-            "inicio_dt": True,
-            "fin_dt": True,
-            "duracion_min": ':.0f',
-            "fuente_plot": True,
-            "quirofano": False,
-        },
-    )
-    fig.update_yaxes(categoryorder="category ascending")
+    if "procedimiento_base" in data.columns:
+        data["etiqueta"] = data["procedimiento_base"].fillna("Sin nombre")
+    elif "procedimiento" in data.columns:
+        data["etiqueta"] = data["procedimiento"].fillna("Sin nombre")
+    else:
+        data["etiqueta"] = "Sin nombre"
+
+    if "fuente" not in data.columns:
+        data["fuente"] = "Histórico"
+
+    data["duracion_min"] = (
+        (data["fin_dt"] - data["inicio_dt"]).dt.total_seconds() / 60
+    ).round()
+
+    quirofanos = sorted(data["quirofano"].dropna().astype(str).unique().tolist())
+
+    colores = {
+        "Histórico": "#9EC9F5",
+        "Propuesta añadida": "#1565C0",
+    }
+
+    # Dibujar una banda de fondo por quirófano
+    for q in quirofanos:
+        fig.add_trace(
+            go.Bar(
+                x=[(fin_bloque - inicio_bloque).total_seconds() / 3600],
+                y=[q],
+                base=[inicio_bloque],
+                orientation="h",
+                marker=dict(color="rgba(180, 200, 230, 0.12)", line=dict(width=0)),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    # Dibujar cada cirugía como bloque horizontal
+    for _, fila in data.sort_values(["quirofano", "inicio_dt"]).iterrows():
+        duracion_horas = (fila["fin_dt"] - fila["inicio_dt"]).total_seconds() / 3600
+        fuente = fila["fuente"]
+        color = colores.get(fuente, "#90A4AE")
+
+        texto = str(fila["etiqueta"])
+        if len(texto) > 28:
+            texto = texto[:28] + "..."
+
+        fig.add_trace(
+            go.Bar(
+                x=[duracion_horas],
+                y=[str(fila["quirofano"])],
+                base=[fila["inicio_dt"]],
+                orientation="h",
+                marker=dict(
+                    color=color,
+                    line=dict(color="rgba(0,0,0,0.20)", width=1),
+                ),
+                text=[texto],
+                textposition="inside",
+                insidetextanchor="middle",
+                name=fuente,
+                legendgroup=fuente,
+                showlegend=not any(
+                    tr.name == fuente for tr in fig.data if hasattr(tr, "name")
+                ),
+                hovertemplate=(
+                    f"<b>{fila['etiqueta']}</b><br>"
+                    f"Quirófano: {fila['quirofano']}<br>"
+                    f"Inicio: {fila['inicio_dt'].strftime('%H:%M')}<br>"
+                    f"Fin: {fila['fin_dt'].strftime('%H:%M')}<br>"
+                    f"Duración: {int(fila['duracion_min'])} min<br>"
+                    f"Origen: {fuente}<extra></extra>"
+                ),
+            )
+        )
+
+    # Líneas horarias
+    for hora in range(8, 21):
+        x_hora = pd.Timestamp(f"{pd.to_datetime(fecha).strftime('%Y-%m-%d')} {hora:02d}:00")
+        fig.add_vline(
+            x=x_hora,
+            line_width=1,
+            line_dash="dot",
+            line_color="rgba(80,80,80,0.20)",
+            layer="below",
+        )
+
     fig.update_layout(
         title=titulo,
-        xaxis_title="Hora del día",
-        yaxis_title="Quirófano",
-        height=520,
         template="plotly_white",
+        barmode="overlay",
+        height=max(450, 95 * len(quirofanos) + 120),
+        margin=dict(l=40, r=20, t=60, b=40),
         legend_title="Origen",
-        margin=dict(l=10, r=10, t=60, b=10),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(size=13),
     )
-    fig.update_xaxes(range=[inicio_bloque, fin_bloque], tickformat="%H:%M")
+
+    fig.update_xaxes(
+        range=[inicio_bloque, fin_bloque],
+        tickformat="%H:%M",
+        dtick=60 * 60 * 1000,
+        title="Hora del día",
+        showgrid=False,
+    )
+
+    fig.update_yaxes(
+        title="Quirófano",
+        autorange="reversed",
+        categoryorder="array",
+        categoryarray=quirofanos,
+        showgrid=False,
+    )
+
     return fig
 
 
@@ -218,13 +316,42 @@ def main() -> None:
                     options=list(propuestas.index),
                     format_func=lambda i: f"{propuestas.loc[i, 'quirofano']} · {propuestas.loc[i, 'inicio'].strftime('%H:%M')} - {propuestas.loc[i, 'fin_estimado'].strftime('%H:%M')}",
                 )
-
+                #EVITAMOS A TODA COSTA QUE HAYA SOLAPAMIENTOS
                 if st.button("Añadir cirugía a la agenda", type="primary"):
                     fila = propuestas.loc[idx].to_dict()
                     fila["fecha"] = fecha_ts
-                    st.session_state.cirugias_anadidas.append(fila)
-                    st.success("Cirugía añadida a la simulación de agenda.")
-                    st.rerun()
+
+                    agenda_actual = obtener_agenda_combinada(
+                        df_real,
+                        fecha_ts,
+                        st.session_state.cirugias_anadidas,
+                     )
+
+                    inicio_nuevo = pd.to_datetime(fila["inicio"])
+                    fin_nuevo = pd.to_datetime(fila["fin_estimado"])
+                    quirofano_nuevo = str(fila["quirofano"])
+
+                    agenda_q = agenda_actual[agenda_actual["quirofano"].astype(str) == quirofano_nuevo].copy()
+
+                    hay_solape = False
+                    if not agenda_q.empty:
+                        agenda_q["inicio_dt"] = pd.to_datetime(agenda_q["inicio_dt"])
+                        agenda_q["fin_dt"] = pd.to_datetime(agenda_q["fin_dt"])
+
+                        for _, existente in agenda_q.iterrows():
+                           inicio_existente = existente["inicio_dt"]
+                           fin_existente = existente["fin_dt"]
+
+                           if inicio_nuevo < fin_existente and fin_nuevo > inicio_existente:
+                            hay_solape = True
+                            break
+
+                    if hay_solape:
+                        st.error(f"No se puede añadir la cirugía porque se solapa con otra en {quirofano_nuevo}.")
+                    else:
+                        st.session_state.cirugias_anadidas.append(fila)
+                        st.success("Cirugía añadida a la simulación de agenda.")
+                        st.rerun()
 
                 if st.session_state.cirugias_anadidas and st.button("Vaciar simulación"):
                     st.session_state.cirugias_anadidas = []
@@ -340,7 +467,7 @@ def main() -> None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-        st.info("Para el TFG, esta exportación te sirve como evidencia del funcionamiento del prototipo y de la simulación de agenda.")
+        st.info("Exportación para la planificación del equipo de quirofano")
 
 
 if __name__ == "__main__":

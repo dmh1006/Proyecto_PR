@@ -15,26 +15,38 @@ DATA_PATH = BASE_DIR / "quirofano_febrero_limpio.csv"
 # CARGA Y PREPARACIÓN
 # ==========================================================
 
-def cargar_datos(data_path: Path | str = DATA_PATH) -> pd.DataFrame:
-    """Carga el dataset limpio del bloque quirúrgico."""
+from pathlib import Path
+import pandas as pd
+
+
+def cargar_datos():
+    """
+    Carga el dataset limpio de quirófano buscando el CSV en varias rutas posibles.
+    """
+    base_dir = Path(__file__).resolve().parent
+    root_dir = base_dir.parent
+
+    rutas_posibles = [
+        base_dir / "quirofano_febrero_limpio.csv",
+        root_dir / "quirofano_febrero_limpio.csv",
+        base_dir / "Data" / "quirofano_febrero_limpio.csv",
+        root_dir / "Data" / "quirofano_febrero_limpio.csv",
+        root_dir / "Proyecto" / "quirofano_febrero_limpio.csv",
+    ]
+
+    data_path = None
+    for ruta in rutas_posibles:
+        if ruta.exists():
+            data_path = ruta
+            break
+
+    if data_path is None:
+        raise FileNotFoundError(
+            "No se encontró 'quirofano_febrero_limpio.csv'. "
+            f"Rutas revisadas: {[str(r) for r in rutas_posibles]}"
+        )
+
     df = pd.read_csv(data_path, parse_dates=["fecha", "inicio_dt", "fin_dt"])
-
-    for col in [
-        "servicio",
-        "quirofano",
-        "centro",
-        "anestesia",
-        "ambulatorio",
-        "tipo_caso",
-        "turno",
-        "diagnostico",
-        "procedimiento",
-        "cirujano_principal",
-        "anestesista_principal",
-    ]:
-        if col in df.columns:
-            df[col] = df[col].astype("string").str.strip()
-
     return df
 
 
@@ -375,6 +387,37 @@ def obtener_agenda_combinada(
 
     return agenda.sort_values(["quirofano", "inicio_dt"]).reset_index(drop=True)
 
+def hay_solape_en_quirofano(
+    agenda: pd.DataFrame,
+    quirofano: str,
+    inicio_nuevo: pd.Timestamp,
+    fin_nuevo: pd.Timestamp,
+) -> bool:
+    """
+    Comprueba si una nueva cirugía se solapa con alguna ya existente
+    en el mismo quirófano.
+    """
+    if agenda.empty:
+        return False
+
+    agenda_q = agenda[agenda["quirofano"].astype(str) == str(quirofano)].copy()
+
+    if agenda_q.empty:
+        return False
+
+    agenda_q["inicio_dt"] = pd.to_datetime(agenda_q["inicio_dt"])
+    agenda_q["fin_dt"] = pd.to_datetime(agenda_q["fin_dt"])
+
+    for _, fila in agenda_q.iterrows():
+        inicio_existente = fila["inicio_dt"]
+        fin_existente = fila["fin_dt"]
+
+        # Hay solape si el nuevo empieza antes de que termine el existente
+        # y termina después de que empiece el existente.
+        if inicio_nuevo < fin_existente and fin_nuevo > inicio_existente:
+            return True
+
+    return False
 
 # ==========================================================
 # EXPORTACIÓN
