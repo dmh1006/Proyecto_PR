@@ -316,40 +316,56 @@ def main() -> None:
                     options=list(propuestas.index),
                     format_func=lambda i: f"{propuestas.loc[i, 'quirofano']} · {propuestas.loc[i, 'inicio'].strftime('%H:%M')} - {propuestas.loc[i, 'fin_estimado'].strftime('%H:%M')}",
                 )
-                #EVITAMOS A TODA COSTA QUE HAYA SOLAPAMIENTOS
+                # EVITAMOS A TODA COSTA QUE HAYA SOLAPAMIENTOS
                 if st.button("Añadir cirugía a la agenda", type="primary"):
                     fila = propuestas.loc[idx].to_dict()
-                    fila["fecha"] = fecha_ts
+
+                    nueva = {
+                        "fecha": fecha_ts,
+                        "quirofano": fila["quirofano"],
+                        "inicio_dt": pd.to_datetime(fila["inicio"]),
+                        "fin_dt": pd.to_datetime(fila["fin_estimado"]),
+                        "procedimiento_base": fila["procedimiento"],
+                        "duracion_min": fila["duracion_necesaria"],
+                        "holgura_min": fila.get("holgura_min", None),
+                        "fuente": "Propuesta añadida",
+                        "es_quirofano_habitual": fila.get("es_quirofano_habitual", None),
+                    }
 
                     agenda_actual = obtener_agenda_combinada(
                         df_real,
                         fecha_ts,
                         st.session_state.cirugias_anadidas,
-                     )
+                    )
 
-                    inicio_nuevo = pd.to_datetime(fila["inicio"])
-                    fin_nuevo = pd.to_datetime(fila["fin_estimado"])
-                    quirofano_nuevo = str(fila["quirofano"])
+                    inicio_nuevo = pd.to_datetime(nueva["inicio_dt"])
+                    fin_nuevo = pd.to_datetime(nueva["fin_dt"])
+                    quirofano_nuevo = str(nueva["quirofano"])
 
-                    agenda_q = agenda_actual[agenda_actual["quirofano"].astype(str) == quirofano_nuevo].copy()
+                    agenda_q = agenda_actual[
+                        agenda_actual["quirofano"].astype(str) == quirofano_nuevo
+                    ].copy()
 
                     hay_solape = False
+
                     if not agenda_q.empty:
                         agenda_q["inicio_dt"] = pd.to_datetime(agenda_q["inicio_dt"])
                         agenda_q["fin_dt"] = pd.to_datetime(agenda_q["fin_dt"])
 
                         for _, existente in agenda_q.iterrows():
-                           inicio_existente = existente["inicio_dt"]
-                           fin_existente = existente["fin_dt"]
+                            inicio_existente = existente["inicio_dt"]
+                            fin_existente = existente["fin_dt"]
 
-                           if inicio_nuevo < fin_existente and fin_nuevo > inicio_existente:
-                            hay_solape = True
-                            break
+                            if inicio_nuevo < fin_existente and fin_nuevo > inicio_existente:
+                                hay_solape = True
+                                break
 
                     if hay_solape:
-                        st.error(f"No se puede añadir la cirugía porque se solapa con otra en {quirofano_nuevo}.")
+                        st.error(
+                            f"No se puede añadir la cirugía porque se solapa con otra en {quirofano_nuevo}."
+                        )
                     else:
-                        st.session_state.cirugias_anadidas.append(fila)
+                        st.session_state.cirugias_anadidas.append(nueva)
                         st.success("Cirugía añadida a la simulación de agenda.")
                         st.rerun()
 
@@ -362,10 +378,19 @@ def main() -> None:
             st.subheader("Cirugías simuladas")
             if st.session_state.cirugias_anadidas:
                 sim = pd.DataFrame(st.session_state.cirugias_anadidas).copy()
-                sim["inicio"] = pd.to_datetime(sim["inicio"]).dt.strftime("%Y-%m-%d %H:%M")
-                sim["fin_estimado"] = pd.to_datetime(sim["fin_estimado"]).dt.strftime("%Y-%m-%d %H:%M")
+                sim["inicio_dt"] = pd.to_datetime(sim["inicio_dt"]).dt.strftime("%Y-%m-%d %H:%M")
+                sim["fin_dt"] = pd.to_datetime(sim["fin_dt"]).dt.strftime("%Y-%m-%d %H:%M")
+
                 st.dataframe(
-                    sim[["procedimiento", "quirofano", "inicio", "fin_estimado", "holgura_min"]],
+                    sim[
+                        [
+                           "procedimiento_base",
+                           "quirofano",
+                           "inicio_dt",
+                            "fin_dt",
+                            "holgura_min",
+                        ]
+                    ],
                     use_container_width=True,
                     hide_index=True,
                 )
