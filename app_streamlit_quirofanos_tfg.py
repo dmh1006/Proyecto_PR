@@ -380,6 +380,29 @@ def main() -> None:
                     options=list(propuestas.index),
                     format_func=lambda i: f"{propuestas.loc[i, 'quirofano']} · {propuestas.loc[i, 'inicio'].strftime('%H:%M')} - {propuestas.loc[i, 'fin_estimado'].strftime('%H:%M')}",
                 )
+                col_p1, col_p2, col_p3 = st.columns(3)
+
+                with col_p1:
+                    paciente_sim = st.text_input(
+                        "Paciente",
+                        key="paciente_sim",
+                        placeholder="Nombre y apellidos del paciente",
+                    )
+
+                with col_p2:
+                    cirujano_sim = st.text_input(
+                        "Cirujano principal",
+                        key="cirujano_sim",
+                        placeholder="Nombre del cirujano",
+                    )
+
+                with col_p3:
+                    anestesista_sim = st.text_input(
+                        "Anestesista principal",
+                        key="anestesista_sim",
+                        placeholder="Nombre del anestesista",
+                    )
+
                 # EVITAMOS A TODA COSTA QUE HAYA SOLAPAMIENTOS
                 if st.button("Añadir cirugía a la agenda", type="primary"):
                     fila = propuestas.loc[idx].to_dict()
@@ -394,6 +417,9 @@ def main() -> None:
                         "holgura_min": fila.get("holgura_min", None),
                         "fuente": "Propuesta añadida",
                         "es_quirofano_habitual": fila.get("es_quirofano_habitual", None),
+                        "paciente": paciente_sim,
+                        "cirujano_principal": cirujano_sim,
+                        "anestesista_principal": anestesista_sim,
                     }
 
                     agenda_actual = obtener_agenda_combinada(
@@ -452,6 +478,9 @@ def main() -> None:
                            "quirofano",
                            "inicio_dt",
                             "fin_dt",
+                            "holgura_min",
+                            "cirujano_principal",
+                            "anestesista_principal",
                             "holgura_min",
                         ]
                     ],
@@ -558,18 +587,18 @@ def main() -> None:
 
         st.info("Exportación para la planificación del equipo de quirofano")
 
+# ----------------------------------------------------------
+# RENDER DE VISUALIZACIÓN
+# ----------------------------------------------------------
+
+
 def render_agenda_visual(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: str):
-    """
-    Renderiza una agenda diaria por quirófanos usando HTML/CSS.
-    Cada fila es un quirófano y cada cirugía es un bloque horizontal
-    posicionado según su hora de inicio y fin.
-    """
     fecha = pd.to_datetime(fecha)
-    inicio_jornada = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 08:00:00")
+    inicio_jornada = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 07:00:00")
     fin_jornada = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 20:00:00")
     minutos_totales = int((fin_jornada - inicio_jornada).total_seconds() / 60)
 
-    st.markdown(f"### {titulo}")
+    st.subheader(titulo)
 
     if agenda.empty:
         st.info("No hay cirugías registradas para este día.")
@@ -581,203 +610,41 @@ def render_agenda_visual(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: str)
     data = data.dropna(subset=["quirofano", "inicio_dt", "fin_dt"]).copy()
 
     if "procedimiento_base" not in data.columns:
-        if "procedimiento" in data.columns:
-            data["procedimiento_base"] = data["procedimiento"]
-        else:
-            data["procedimiento_base"] = "Sin nombre"
+        data["procedimiento_base"] = data.get("procedimiento", "Sin nombre")
 
-    columnas_opcionales = [
+    for col in [
+        "paciente",
         "cirujano_principal",
         "anestesista_principal",
         "servicio",
-        "tipo_caso",
         "anestesia",
         "fuente",
-    ]
-    for col in columnas_opcionales:
+    ]:
         if col not in data.columns:
             data[col] = ""
 
     quirofanos = sorted(data["quirofano"].astype(str).unique().tolist())
 
-    px_por_minuto = 2.4
+    # Escala visual
+    px_por_minuto = 1.55
     ancho_tiempo = int(minutos_totales * px_por_minuto)
-    ancho_label = 100
-    altura_fila = 110
+    ancho_label = 70
+    altura_fila = 64
 
+    # Cabecera horaria
     horas_html = ""
-    for hora in range(8, 21):
-        offset_min = (hora - 8) * 60
-        left = int(offset_min * px_por_minuto)
+    for hora in range(7, 21):
+        left = int((hora - 7) * 60 * px_por_minuto)
         horas_html += f"""
-        <div style="
-            position:absolute;
-            left:{left}px;
-            top:0;
-            width:1px;
-            height:100%;
-            background:#cfcfcf;
-        "></div>
-        <div style="
-            position:absolute;
-            left:{left + 4}px;
-            top:4px;
-            font-size:12px;
-            color:#555;
-            font-weight:600;
-        ">{hora:02d}:00</div>
+        <div class="hour-line" style="left:{left}px;"></div>
+        <div class="hour-text" style="left:{left + 2}px;">{hora}:00</div>
         """
 
-    st.markdown(
-    f"""
-    <style>
-    .agenda-wrapper {{
-        width: 100%;
-        overflow-x: auto;
-        border: 1px solid #d9d9d9;
-        border-radius: 10px;
-        background: white;
-        padding: 12px;
-    }}
-
-    .agenda-total {{
-        min-width: {ancho_label + ancho_tiempo + 40}px;
-    }}
-
-    .agenda-header {{
-        display: flex;
-        align-items: stretch;
-        margin-bottom: 8px;
-    }}
-
-    .agenda-header-left {{
-        width: {ancho_label}px;
-        min-width: {ancho_label}px;
-    }}
-
-    .agenda-header-time {{
-        position: relative;
-        width: {ancho_tiempo}px;
-        min-width: {ancho_tiempo}px;
-        height: 34px;
-        background: #f4f4f4;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-    }}
-
-    .agenda-row {{
-        display: flex;
-        align-items: stretch;
-        margin-bottom: 10px;
-    }}
-
-    .agenda-label {{
-        width: {ancho_label}px;
-        min-width: {ancho_label}px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: #f7f7f7;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        font-weight: 700;
-        color: #2c3e50;
-        font-size: 15px;
-    }}
-
-    .agenda-track {{
-        position: relative;
-        width: {ancho_tiempo}px;
-        min-width: {ancho_tiempo}px;
-        height: {altura_fila}px;
-        background:
-            repeating-linear-gradient(
-                to right,
-                #f7f7f7 0px,
-                #f7f7f7 {int(px_por_minuto * 60) - 1}px,
-                #d9d9d9 {int(px_por_minuto * 60) - 1}px,
-                #d9d9d9 {int(px_por_minuto * 60)}px
-            );
-        border: 1px solid #dfdfdf;
-        border-radius: 8px;
-        overflow: hidden;
-        box-sizing: border-box;
-    }}
-
-    .bloque-cirugia {{
-        position: absolute;
-        top: 8px;
-        height: 94px;
-        border-radius: 10px;
-        padding: 8px 10px;
-        box-sizing: border-box;
-        overflow: hidden;
-        border: 1px solid rgba(0,0,0,0.18);
-        box-shadow: 0 3px 8px rgba(0,0,0,0.12);
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-start;
-    }}
-
-    .bloque-historico {{
-        background: linear-gradient(135deg, #d7e8f8 0%, #b8d2ec 100%);
-        color: #102030;
-    }}
-
-    .bloque-propuesta {{
-        background: linear-gradient(135deg, #4f8edc 0%, #2f6fbe 100%);
-        color: white;
-        border: 1px solid rgba(20, 50, 100, 0.35);
-    }}
-
-    .bloque-titulo {{
-        font-size: 13px;
-        font-weight: 700;
-        line-height: 1.15;
-        margin-bottom: 6px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }}
-
-    .bloque-linea {{
-        font-size: 11px;
-        line-height: 1.2;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        opacity: 0.95;
-    }}
-
-    .bloque-linea-hora {{
-        font-size: 11px;
-        font-weight: 700;
-        margin-bottom: 4px;
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-    html = f"""
-    <div class="agenda-wrapper">
-      <div class="agenda-total">
-        <div class="agenda-header">
-          <div class="agenda-header-left"></div>
-          <div class="agenda-header-time">
-            {horas_html}
-          </div>
-        </div>
-    """
+    filas_html = ""
 
     for q in quirofanos:
-        html += f"""
-        <div class="agenda-row">
-            <div class="agenda-label">{q}</div>
-            <div class="agenda-track">
-        """
-
         agenda_q = data[data["quirofano"].astype(str) == q].sort_values("inicio_dt")
+        bloques_html = ""
 
         for _, fila in agenda_q.iterrows():
             inicio = fila["inicio_dt"]
@@ -792,43 +659,188 @@ def render_agenda_visual(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: str)
             left_min = (inicio_vis - inicio_jornada).total_seconds() / 60
             width_min = (fin_vis - inicio_vis).total_seconds() / 60
 
-            left_px = max(0, int(left_min * px_por_minuto))
-            width_px = max(140, int(width_min * px_por_minuto))
+            left_px = int(left_min * px_por_minuto)
+            width_px = max(46, int(width_min * px_por_minuto))
 
-            procedimiento = str(fila.get("procedimiento_base", "Sin nombre"))
+            procedimiento = str(fila.get("procedimiento_base", "") or "Sin nombre")
             cirujano = str(fila.get("cirujano_principal", "") or "")
             anestesista = str(fila.get("anestesista_principal", "") or "")
-            servicio = str(fila.get("servicio", "") or "")
-            anestesia = str(fila.get("anestesia", "") or "")
             fuente = str(fila.get("fuente", "Histórico") or "Histórico")
+            paciente = str(fila.get("paciente", "") or "")
 
-            clase = "bloque-propuesta" if fuente == "Propuesta añadida" else "bloque-historico"
+            if width_px < 95:
+                texto = f"{inicio.strftime('%H:%M')}"
+            elif width_px < 150:
+                texto = f"{procedimiento[:18]}<br>{inicio.strftime('%H:%M')}-{fin.strftime('%H:%M')}"
+            else:
+                texto = (
+                    f"{procedimiento[:28]}<br>"
+                    f"{inicio.strftime('%H:%M')}-{fin.strftime('%H:%M')}<br>"
+                    f"{cirujano[:24]}"
+                )
 
-            hora_txt = f"{inicio.strftime('%H:%M')} - {fin.strftime('%H:%M')}"
+            clase = "block-propuesta" if fuente == "Propuesta añadida" else "block-historico"
 
-            html += f"""
-            <div class="bloque-cirugia {clase}"
+            tooltip = (
+                f"{procedimiento} | "
+                f"{inicio.strftime('%H:%M')} - {fin.strftime('%H:%M')} | "
+                f"Cirujano: {cirujano} | "
+                f"Anestesista: {anestesista}"
+            )
+
+            bloques_html += f"""
+            <div class="surgery-block {clase}"
                  style="left:{left_px}px; width:{width_px}px;"
-                 title="{procedimiento} | {hora_txt} | Cirujano: {cirujano} | Anestesista: {anestesista} | Servicio: {servicio}">
-                <div class="bloque-titulo">{procedimiento}</div>
-                <div class="bloque-linea">{hora_txt}</div>
-                <div class="bloque-linea">{cirujano}</div>
-                <div class="bloque-linea">{anestesista}</div>
-                <div class="bloque-linea">{servicio} {anestesia}</div>
+                 title="{tooltip}">
+                {texto}
             </div>
             """
 
-        html += """
+        filas_html += f"""
+        <div class="row-wrap">
+            <div class="row-label">{q}</div>
+            <div class="row-track">
+                {bloques_html}
             </div>
         </div>
         """
 
-    html += """
-      </div>
-    </div>
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background: #ffffff;
+        }}
+
+        .scheduler {{
+            width: 100%;
+            overflow-x: auto;
+            border: 1px solid #d7d7d7;
+            border-radius: 8px;
+            background: #ececec;
+            padding: 12px;
+            box-sizing: border-box;
+        }}
+
+        .inner {{
+            min-width: {ancho_label + ancho_tiempo + 30}px;
+        }}
+
+        .header {{
+            display: flex;
+            margin-bottom: 8px;
+        }}
+
+        .header-left {{
+            width: {ancho_label}px;
+            min-width: {ancho_label}px;
+        }}
+
+        .header-time {{
+            position: relative;
+            width: {ancho_tiempo}px;
+            min-width: {ancho_tiempo}px;
+            height: 28px;
+            background: #cfcfcf;
+            border-radius: 4px;
+        }}
+
+        .hour-line {{
+            position: absolute;
+            top: 0;
+            width: 1px;
+            height: 100%;
+            background: #8f8f8f;
+        }}
+
+        .hour-text {{
+            position: absolute;
+            top: 3px;
+            font-size: 11px;
+            color: #333;
+        }}
+
+        .row-wrap {{
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }}
+
+        .row-label {{
+            width: {ancho_label}px;
+            min-width: {ancho_label}px;
+            text-align: center;
+            font-weight: 700;
+            font-size: 14px;
+            color: #222;
+        }}
+
+        .row-track {{
+            position: relative;
+            width: {ancho_tiempo}px;
+            min-width: {ancho_tiempo}px;
+            height: {altura_fila}px;
+            background:
+                repeating-linear-gradient(
+                    to right,
+                    #bdbdbd 0px,
+                    #bdbdbd 1px,
+                    transparent 1px,
+                    transparent {int(px_por_minuto * 60)}px
+                ),
+                #d9d9d9;
+            border-radius: 3px;
+            overflow: hidden;
+        }}
+
+        .surgery-block {{
+            position: absolute;
+            top: 10px;
+            height: 42px;
+            border: 1px solid rgba(0,0,0,0.25);
+            box-sizing: border-box;
+            padding: 3px 5px;
+            font-size: 10px;
+            line-height: 1.15;
+            color: #111;
+            overflow: hidden;
+            white-space: normal;
+        }}
+
+        .block-historico {{
+            background: #f6b100;
+        }}
+
+        .block-propuesta {{
+            background: #7CFC00;
+        }}
+    </style>
+    </head>
+    <body>
+        <div class="scheduler">
+            <div class="inner">
+                <div class="header">
+                    <div class="header-left"></div>
+                    <div class="header-time">
+                        {horas_html}
+                    </div>
+                </div>
+
+                {filas_html}
+            </div>
+        </div>
+    </body>
+    </html>
     """
 
-    components.html(html, height=max(220, 170 + 130 * len(quirofanos)), scrolling=True)
+    alto = 120 + len(quirofanos) * (altura_fila + 8)
+    components.html(html, height=max(220, alto), scrolling=True)
 
 
 if __name__ == "__main__":

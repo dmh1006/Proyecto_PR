@@ -425,6 +425,7 @@ def obtener_agenda_combinada(df_real, fecha_sel, cirugias_anadidas):
         "fuente",
         "holgura_min",
         "es_quirofano_habitual",
+        "paciente",
         "cirujano_principal",
         "anestesista_principal",
         "servicio",
