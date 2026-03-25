@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from Proyecto.planificador_tfg import (
     agenda_dia,
@@ -53,59 +54,79 @@ def minutos_desde_referencia(ts: pd.Timestamp, referencia: pd.Timestamp) -> floa
 
 def figura_timeline_agenda(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: str) -> go.Figure:
     """
-    Genera una agenda diaria horizontal por quirófanos.
-    Cada fila corresponde a un quirófano y cada cirugía se dibuja como un bloque horizontal.
+    Genera una agenda diaria estilo panel de quirófanos:
+    - una fila por quirófano
+    - bloques horizontales por cirugía
+    - información relevante dentro del bloque
+    - rejilla horaria marcada
     """
-    inicio_bloque = pd.Timestamp(f"{pd.to_datetime(fecha).strftime('%Y-%m-%d')} 08:00")
-    fin_bloque = pd.Timestamp(f"{pd.to_datetime(fecha).strftime('%Y-%m-%d')} 20:00")
+    fecha = pd.to_datetime(fecha)
+    inicio_bloque = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 08:00:00")
+    fin_bloque = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 20:00:00")
 
     fig = go.Figure()
 
     if agenda.empty:
         fig.update_layout(
             title=titulo,
-            xaxis_title="Hora del día",
-            yaxis_title="Quirófano",
             template="plotly_white",
             height=500,
+            xaxis_title="Hora del día",
+            yaxis_title="Quirófano",
         )
         fig.add_annotation(
             text="No hay cirugías registradas para este día.",
-            xref="paper",
-            yref="paper",
             x=0.5,
             y=0.5,
+            xref="paper",
+            yref="paper",
             showarrow=False,
             font=dict(size=16),
         )
         return fig
 
     data = agenda.copy()
-    data["inicio_dt"] = pd.to_datetime(data["inicio_dt"])
-    data["fin_dt"] = pd.to_datetime(data["fin_dt"])
+    data["inicio_dt"] = pd.to_datetime(data["inicio_dt"], errors="coerce")
+    data["fin_dt"] = pd.to_datetime(data["fin_dt"], errors="coerce")
+    data = data.dropna(subset=["quirofano", "inicio_dt", "fin_dt"]).copy()
 
-    if "procedimiento_base" in data.columns:
-        data["etiqueta"] = data["procedimiento_base"].fillna("Sin nombre")
-    elif "procedimiento" in data.columns:
-        data["etiqueta"] = data["procedimiento"].fillna("Sin nombre")
-    else:
-        data["etiqueta"] = "Sin nombre"
+    # Campos principales
+    if "procedimiento_base" not in data.columns:
+        if "procedimiento" in data.columns:
+            data["procedimiento_base"] = data["procedimiento"]
+        else:
+            data["procedimiento_base"] = "Sin nombre"
 
     if "fuente" not in data.columns:
         data["fuente"] = "Histórico"
+
+    # Campos opcionales que queremos enseñar
+    columnas_opcionales = [
+        "cirujano_principal",
+        "anestesista_principal",
+        "servicio",
+        "tipo_caso",
+        "turno",
+        "ambulatorio",
+        "anestesia",
+    ]
+    for col in columnas_opcionales:
+        if col not in data.columns:
+            data[col] = ""
 
     data["duracion_min"] = (
         (data["fin_dt"] - data["inicio_dt"]).dt.total_seconds() / 60
     ).round()
 
-    quirofanos = sorted(data["quirofano"].dropna().astype(str).unique().tolist())
+    quirofanos = sorted(data["quirofano"].astype(str).unique().tolist())
 
+    # Paleta visual más seria
     colores = {
-        "Histórico": "#9EC9F5",
-        "Propuesta añadida": "#1565C0",
+        "Histórico": "#A7C7E7",
+        "Propuesta añadida": "#2F6DB3",
     }
 
-    # Dibujar una banda de fondo por quirófano
+    # Fondo tipo panel por cada quirófano
     for q in quirofanos:
         fig.add_trace(
             go.Bar(
@@ -113,21 +134,63 @@ def figura_timeline_agenda(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: st
                 y=[q],
                 base=[inicio_bloque],
                 orientation="h",
-                marker=dict(color="rgba(180, 200, 230, 0.12)", line=dict(width=0)),
+                marker=dict(
+                    color="rgba(210, 210, 210, 0.22)",
+                    line=dict(width=0),
+                ),
                 hoverinfo="skip",
                 showlegend=False,
             )
         )
 
-    # Dibujar cada cirugía como bloque horizontal
+    # Dibujar cada cirugía
+    leyendas_ya_puestas = set()
+
     for _, fila in data.sort_values(["quirofano", "inicio_dt"]).iterrows():
         duracion_horas = (fila["fin_dt"] - fila["inicio_dt"]).total_seconds() / 3600
         fuente = fila["fuente"]
         color = colores.get(fuente, "#90A4AE")
 
-        texto = str(fila["etiqueta"])
-        if len(texto) > 28:
-            texto = texto[:28] + "..."
+        procedimiento = str(fila["procedimiento_base"]) if pd.notna(fila["procedimiento_base"]) else "Sin nombre"
+        cirujano = str(fila["cirujano_principal"]) if pd.notna(fila["cirujano_principal"]) else ""
+        anestesista = str(fila["anestesista_principal"]) if pd.notna(fila["anestesista_principal"]) else ""
+        servicio = str(fila["servicio"]) if pd.notna(fila["servicio"]) else ""
+        tipo_caso = str(fila["tipo_caso"]) if pd.notna(fila["tipo_caso"]) else ""
+        anestesia = str(fila["anestesia"]) if pd.notna(fila["anestesia"]) else ""
+
+        # Texto visible dentro del bloque
+        texto_bloque = procedimiento
+        if len(texto_bloque) > 26:
+            texto_bloque = texto_bloque[:26] + "..."
+
+        if duracion_horas >= 1.2 and cirujano:
+            texto_bloque += f"<br><sup>{cirujano}</sup>"
+
+        # Hover detallado
+        hover = (
+            f"<b>{procedimiento}</b><br>"
+            f"Quirófano: {fila['quirofano']}<br>"
+            f"Inicio: {fila['inicio_dt'].strftime('%H:%M')}<br>"
+            f"Fin: {fila['fin_dt'].strftime('%H:%M')}<br>"
+            f"Duración: {int(fila['duracion_min'])} min<br>"
+        )
+
+        if servicio:
+            hover += f"Servicio: {servicio}<br>"
+        if cirujano:
+            hover += f"Cirujano: {cirujano}<br>"
+        if anestesista:
+            hover += f"Anestesista: {anestesista}<br>"
+        if anestesia:
+            hover += f"Anestesia: {anestesia}<br>"
+        if tipo_caso:
+            hover += f"Tipo de caso: {tipo_caso}<br>"
+
+        hover += f"Origen: {fuente}<extra></extra>"
+
+        nombre_leyenda = fuente if fuente not in leyendas_ya_puestas else None
+        if fuente not in leyendas_ya_puestas:
+            leyendas_ya_puestas.add(fuente)
 
         fig.add_trace(
             go.Bar(
@@ -137,35 +200,38 @@ def figura_timeline_agenda(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: st
                 orientation="h",
                 marker=dict(
                     color=color,
-                    line=dict(color="rgba(0,0,0,0.20)", width=1),
+                    line=dict(color="rgba(40,40,40,0.35)", width=1),
                 ),
-                text=[texto],
+                text=[texto_bloque],
                 textposition="inside",
                 insidetextanchor="middle",
-                name=fuente,
+                textfont=dict(size=11, color="black"),
+                name=nombre_leyenda,
                 legendgroup=fuente,
-                showlegend=not any(
-                    tr.name == fuente for tr in fig.data if hasattr(tr, "name")
-                ),
-                hovertemplate=(
-                    f"<b>{fila['etiqueta']}</b><br>"
-                    f"Quirófano: {fila['quirofano']}<br>"
-                    f"Inicio: {fila['inicio_dt'].strftime('%H:%M')}<br>"
-                    f"Fin: {fila['fin_dt'].strftime('%H:%M')}<br>"
-                    f"Duración: {int(fila['duracion_min'])} min<br>"
-                    f"Origen: {fuente}<extra></extra>"
-                ),
+                showlegend=nombre_leyenda is not None,
+                hovertemplate=hover,
             )
         )
 
-    # Líneas horarias
+    # Líneas verticales por hora
     for hora in range(8, 21):
-        x_hora = pd.Timestamp(f"{pd.to_datetime(fecha).strftime('%Y-%m-%d')} {hora:02d}:00")
+        x_hora = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} {hora:02d}:00:00")
         fig.add_vline(
             x=x_hora,
             line_width=1,
+            line_dash="solid",
+            line_color="rgba(100,100,100,0.20)",
+            layer="below",
+        )
+
+    # Líneas secundarias cada 30 min
+    for hora in range(8, 20):
+        x_media = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} {hora:02d}:30:00")
+        fig.add_vline(
+            x=x_media,
+            line_width=1,
             line_dash="dot",
-            line_color="rgba(80,80,80,0.20)",
+            line_color="rgba(120,120,120,0.12)",
             layer="below",
         )
 
@@ -173,12 +239,12 @@ def figura_timeline_agenda(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: st
         title=titulo,
         template="plotly_white",
         barmode="overlay",
-        height=max(450, 95 * len(quirofanos) + 120),
+        height=max(500, 90 * len(quirofanos) + 140),
         margin=dict(l=40, r=20, t=60, b=40),
         legend_title="Origen",
-        plot_bgcolor="white",
+        plot_bgcolor="#F2F2F2",
         paper_bgcolor="white",
-        font=dict(size=13),
+        font=dict(size=12),
     )
 
     fig.update_xaxes(
@@ -282,13 +348,11 @@ def main() -> None:
 
         with left:
             st.subheader(f"Agenda del día · {fecha_ts.strftime('%d/%m/%Y')}")
-            fig = figura_timeline_agenda(
+            render_agenda_visual(
                 agenda_combinada,
                 fecha_ts,
-                "Agenda combinada (histórico + simulación)",
+                "Agenda combinada (histórico + simulación)"
             )
-            st.plotly_chart(fig, use_container_width=True)
-
         with right:
             st.subheader("Propuestas de hueco")
             if propuestas.empty:
@@ -493,6 +557,278 @@ def main() -> None:
             )
 
         st.info("Exportación para la planificación del equipo de quirofano")
+
+def render_agenda_visual(agenda: pd.DataFrame, fecha: pd.Timestamp, titulo: str):
+    """
+    Renderiza una agenda diaria por quirófanos usando HTML/CSS.
+    Cada fila es un quirófano y cada cirugía es un bloque horizontal
+    posicionado según su hora de inicio y fin.
+    """
+    fecha = pd.to_datetime(fecha)
+    inicio_jornada = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 08:00:00")
+    fin_jornada = pd.Timestamp(f"{fecha.strftime('%Y-%m-%d')} 20:00:00")
+    minutos_totales = int((fin_jornada - inicio_jornada).total_seconds() / 60)
+
+    st.markdown(f"### {titulo}")
+
+    if agenda.empty:
+        st.info("No hay cirugías registradas para este día.")
+        return
+
+    data = agenda.copy()
+    data["inicio_dt"] = pd.to_datetime(data["inicio_dt"], errors="coerce")
+    data["fin_dt"] = pd.to_datetime(data["fin_dt"], errors="coerce")
+    data = data.dropna(subset=["quirofano", "inicio_dt", "fin_dt"]).copy()
+
+    if "procedimiento_base" not in data.columns:
+        if "procedimiento" in data.columns:
+            data["procedimiento_base"] = data["procedimiento"]
+        else:
+            data["procedimiento_base"] = "Sin nombre"
+
+    columnas_opcionales = [
+        "cirujano_principal",
+        "anestesista_principal",
+        "servicio",
+        "tipo_caso",
+        "anestesia",
+        "fuente",
+    ]
+    for col in columnas_opcionales:
+        if col not in data.columns:
+            data[col] = ""
+
+    quirofanos = sorted(data["quirofano"].astype(str).unique().tolist())
+
+    px_por_minuto = 2.4
+    ancho_tiempo = int(minutos_totales * px_por_minuto)
+    ancho_label = 100
+    altura_fila = 110
+
+    horas_html = ""
+    for hora in range(8, 21):
+        offset_min = (hora - 8) * 60
+        left = int(offset_min * px_por_minuto)
+        horas_html += f"""
+        <div style="
+            position:absolute;
+            left:{left}px;
+            top:0;
+            width:1px;
+            height:100%;
+            background:#cfcfcf;
+        "></div>
+        <div style="
+            position:absolute;
+            left:{left + 4}px;
+            top:4px;
+            font-size:12px;
+            color:#555;
+            font-weight:600;
+        ">{hora:02d}:00</div>
+        """
+
+    st.markdown(
+    f"""
+    <style>
+    .agenda-wrapper {{
+        width: 100%;
+        overflow-x: auto;
+        border: 1px solid #d9d9d9;
+        border-radius: 10px;
+        background: white;
+        padding: 12px;
+    }}
+
+    .agenda-total {{
+        min-width: {ancho_label + ancho_tiempo + 40}px;
+    }}
+
+    .agenda-header {{
+        display: flex;
+        align-items: stretch;
+        margin-bottom: 8px;
+    }}
+
+    .agenda-header-left {{
+        width: {ancho_label}px;
+        min-width: {ancho_label}px;
+    }}
+
+    .agenda-header-time {{
+        position: relative;
+        width: {ancho_tiempo}px;
+        min-width: {ancho_tiempo}px;
+        height: 34px;
+        background: #f4f4f4;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+    }}
+
+    .agenda-row {{
+        display: flex;
+        align-items: stretch;
+        margin-bottom: 10px;
+    }}
+
+    .agenda-label {{
+        width: {ancho_label}px;
+        min-width: {ancho_label}px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f7f7f7;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        font-weight: 700;
+        color: #2c3e50;
+        font-size: 15px;
+    }}
+
+    .agenda-track {{
+        position: relative;
+        width: {ancho_tiempo}px;
+        min-width: {ancho_tiempo}px;
+        height: {altura_fila}px;
+        background:
+            repeating-linear-gradient(
+                to right,
+                #f7f7f7 0px,
+                #f7f7f7 {int(px_por_minuto * 60) - 1}px,
+                #d9d9d9 {int(px_por_minuto * 60) - 1}px,
+                #d9d9d9 {int(px_por_minuto * 60)}px
+            );
+        border: 1px solid #dfdfdf;
+        border-radius: 8px;
+        overflow: hidden;
+        box-sizing: border-box;
+    }}
+
+    .bloque-cirugia {{
+        position: absolute;
+        top: 8px;
+        height: 94px;
+        border-radius: 10px;
+        padding: 8px 10px;
+        box-sizing: border-box;
+        overflow: hidden;
+        border: 1px solid rgba(0,0,0,0.18);
+        box-shadow: 0 3px 8px rgba(0,0,0,0.12);
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+    }}
+
+    .bloque-historico {{
+        background: linear-gradient(135deg, #d7e8f8 0%, #b8d2ec 100%);
+        color: #102030;
+    }}
+
+    .bloque-propuesta {{
+        background: linear-gradient(135deg, #4f8edc 0%, #2f6fbe 100%);
+        color: white;
+        border: 1px solid rgba(20, 50, 100, 0.35);
+    }}
+
+    .bloque-titulo {{
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.15;
+        margin-bottom: 6px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }}
+
+    .bloque-linea {{
+        font-size: 11px;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        opacity: 0.95;
+    }}
+
+    .bloque-linea-hora {{
+        font-size: 11px;
+        font-weight: 700;
+        margin-bottom: 4px;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+    html = f"""
+    <div class="agenda-wrapper">
+      <div class="agenda-total">
+        <div class="agenda-header">
+          <div class="agenda-header-left"></div>
+          <div class="agenda-header-time">
+            {horas_html}
+          </div>
+        </div>
+    """
+
+    for q in quirofanos:
+        html += f"""
+        <div class="agenda-row">
+            <div class="agenda-label">{q}</div>
+            <div class="agenda-track">
+        """
+
+        agenda_q = data[data["quirofano"].astype(str) == q].sort_values("inicio_dt")
+
+        for _, fila in agenda_q.iterrows():
+            inicio = fila["inicio_dt"]
+            fin = fila["fin_dt"]
+
+            inicio_vis = max(inicio, inicio_jornada)
+            fin_vis = min(fin, fin_jornada)
+
+            if fin_vis <= inicio_jornada or inicio_vis >= fin_jornada:
+                continue
+
+            left_min = (inicio_vis - inicio_jornada).total_seconds() / 60
+            width_min = (fin_vis - inicio_vis).total_seconds() / 60
+
+            left_px = max(0, int(left_min * px_por_minuto))
+            width_px = max(140, int(width_min * px_por_minuto))
+
+            procedimiento = str(fila.get("procedimiento_base", "Sin nombre"))
+            cirujano = str(fila.get("cirujano_principal", "") or "")
+            anestesista = str(fila.get("anestesista_principal", "") or "")
+            servicio = str(fila.get("servicio", "") or "")
+            anestesia = str(fila.get("anestesia", "") or "")
+            fuente = str(fila.get("fuente", "Histórico") or "Histórico")
+
+            clase = "bloque-propuesta" if fuente == "Propuesta añadida" else "bloque-historico"
+
+            hora_txt = f"{inicio.strftime('%H:%M')} - {fin.strftime('%H:%M')}"
+
+            html += f"""
+            <div class="bloque-cirugia {clase}"
+                 style="left:{left_px}px; width:{width_px}px;"
+                 title="{procedimiento} | {hora_txt} | Cirujano: {cirujano} | Anestesista: {anestesista} | Servicio: {servicio}">
+                <div class="bloque-titulo">{procedimiento}</div>
+                <div class="bloque-linea">{hora_txt}</div>
+                <div class="bloque-linea">{cirujano}</div>
+                <div class="bloque-linea">{anestesista}</div>
+                <div class="bloque-linea">{servicio} {anestesia}</div>
+            </div>
+            """
+
+        html += """
+            </div>
+        </div>
+        """
+
+    html += """
+      </div>
+    </div>
+    """
+
+    components.html(html, height=max(220, 170 + 130 * len(quirofanos)), scrolling=True)
 
 
 if __name__ == "__main__":
