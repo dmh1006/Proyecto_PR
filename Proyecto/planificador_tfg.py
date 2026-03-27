@@ -361,6 +361,7 @@ def obtener_agenda_combinada(df_real, fecha_sel, cirugias_anadidas):
     """
     Combina la agenda histórica del día con las cirugías simuladas añadidas
     por el usuario, dejando una estructura homogénea para representar y analizar.
+    Revision
 
     Parámetros
     ----------
