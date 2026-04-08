@@ -466,30 +466,25 @@ def main() -> None:
 
             st.markdown("---")
             st.subheader("Cirugías simuladas")
+
             if st.session_state.cirugias_anadidas:
                 sim = pd.DataFrame(st.session_state.cirugias_anadidas).copy()
+
                 sim["inicio_dt"] = pd.to_datetime(sim["inicio_dt"]).dt.strftime("%Y-%m-%d %H:%M")
                 sim["fin_dt"] = pd.to_datetime(sim["fin_dt"]).dt.strftime("%Y-%m-%d %H:%M")
 
-                st.dataframe(
-                    sim[
-                        [
-                           "procedimiento_base",
-                           "quirofano",
-                           "inicio_dt",
-                            "fin_dt",
-                            "holgura_min",
-                            "cirujano_principal",
-                            "anestesista_principal",
-                            "holgura_min",
-                        ]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.info("Todavía no has añadido ninguna cirugía simulada.")
+                columnas_mostrar = [
+                    "paciente",
+                    "procedimiento_base",
+                    "quirofano",
+                    "inicio_dt",
+                    "fin_dt",
+                    "cirujano_principal",
+                    "anestesista_principal",
+                    "holgura_min",
+                ]
 
+                columnas_mostrar = [col for col in columnas_mostrar if col in sim.columns]
     with tab2:
         st.subheader("Procedimientos más frecuentes")
         proc = analisis_procedimientos(df_real)
